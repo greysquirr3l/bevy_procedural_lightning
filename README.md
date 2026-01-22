@@ -2,7 +2,7 @@
 
 A procedural lightning generation system for Bevy game engine, inspired by the [LightningGen](https://github.com/CXUtk/LightningGen) algorithm.
 
-![Procedural Lightning Demo](https://img.shields.io/badge/Bevy-0.17-blue)
+[![Bevy 0.17](https://img.shields.io/badge/Bevy-0.17-blue)](https://bevyengine.org/)
 ![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue)
 
 ## Features
@@ -13,8 +13,11 @@ A procedural lightning generation system for Bevy game engine, inspired by the [
 - **6 Built-in Presets**: Classic, Dense, Sparse, Chaotic, Smooth, and Branchy configurations
 - **Deterministic Generation**: Same seed produces identical lightning patterns
 - **Bevy Integration**: Full ECS architecture with Bevy 0.17 compatibility
-- **Hanabi Support**: Optional GPU particle effects for production-quality rendering
+- **Hanabi Particle Effects**: Traveling ionized particles with configurable visibility
+- **Flicker Animation**: Customizable flicker speed with on/off intervals
 - **Interactive Demo**: Real-time parameter tweaking with egui interface
+
+> **Note**: The current particle effects are basic traveling particles. Future improvements could include more sophisticated visual effects such as electrical arcs, corona discharge, and dynamic branching particle streams.
 
 ## Demo
 
@@ -67,16 +70,21 @@ use procedural_lightning::{
     spawn_procedural_lightning,
 };
 use bevy::prelude::*;
+use bevy_hanabi::prelude::*;
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
+        .add_plugins(HanabiPlugin)
         .add_plugins(ProceduralLightningPlugin)
         .add_systems(Startup, spawn_lightning)
         .run();
 }
 
-fn spawn_lightning(mut commands: Commands) {
+fn spawn_lightning(
+    mut commands: Commands,
+    mut effects: ResMut<Assets<EffectAsset>>,
+) {
     let config = LightningConfig {
         seed: 42,
         alpha: 0.5,
@@ -91,11 +99,14 @@ fn spawn_lightning(mut commands: Commands) {
 
     spawn_procedural_lightning(
         &mut commands,
+        &mut effects,
         start,
         end,
         &config,
         0.5,  // lifetime in seconds
         Color::srgb(0.3, 0.7, 1.0),  // electric blue
+        true,  // show_gizmos
+        true,  // show_particles
     );
 }
 ```
@@ -148,24 +159,24 @@ let particle_data = tree.get_particle_data(128);
 
 ### Hanabi Particle Effects
 
-```rust
-use procedural_lightning::create_procedural_lightning_particle_effect;
-use bevy_hanabi::prelude::*;
+The library includes basic traveling ionized particle effects. Particles can be toggled on/off and travel from the spawn point to the target:
 
-fn setup_particles(
-    mut effects: ResMut<Assets<EffectAsset>>,
-    tree: &LightningTree,
-) {
-    let base_color = Vec4::new(0.3, 0.7, 1.0, 1.0);
-    let effect_handle = create_procedural_lightning_particle_effect(
-        &mut effects,
-        tree,
-        base_color,
-    );
-    
-    // Spawn the effect...
-}
+```rust
+// Spawn lightning with particles enabled
+spawn_procedural_lightning(
+    &mut commands,
+    &mut effects,
+    start,
+    end,
+    &config,
+    0.5,
+    color,
+    true,  // show_gizmos
+    true,  // show_particles (traveling ionized effect)
+);
 ```
+
+For more advanced effects, you can access the lightning tree directly and create custom particle systems.
 
 ## Technical Details
 
@@ -217,6 +228,7 @@ Contributions welcome! Please open an issue or PR.
 
 ### Ideas for Improvement
 
+- [ ] Enhanced particle effects (electrical arcs, corona discharge, branching streams)
 - [ ] Custom shaders for HDR bloom effects
 - [ ] Sound effects integration
 - [ ] 2D lightning variant
