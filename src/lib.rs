@@ -63,6 +63,8 @@ impl Default for LightningConfig {
 /// A complete lightning bolt tree with main path and branches
 #[derive(Debug, Clone)]
 pub struct LightningTree {
+    /// Root position of the lightning
+    pub root: Vec3,
     /// All nodes in the tree (main path + branches)
     pub nodes: Vec<LightningNode>,
     /// Pairs of node indices representing line segments
@@ -171,7 +173,11 @@ impl LightningTree {
             }
         }
 
-        Self { nodes, segments }
+        Self {
+            root: start,
+            nodes,
+            segments,
+        }
     }
 
     /// Get the total number of segments in the tree
@@ -250,6 +256,12 @@ pub struct ProceduralLightning {
     pub lifetime: Timer,
     /// Base color for the lightning
     pub color: Color,
+    /// Particle effect entities (core, glow, sparks, impact)
+    pub particle_entities: Vec<Entity>,
+    /// Whether to render debug gizmos
+    pub show_gizmos: bool,
+    /// Whether to enable flicker effect (on/off intervals)
+    pub enable_flicker: bool,
 }
 
 impl ProceduralLightning {
@@ -268,6 +280,9 @@ impl ProceduralLightning {
             animation_timer: Timer::from_seconds(0.05, TimerMode::Repeating),
             lifetime: Timer::from_seconds(lifetime_secs, TimerMode::Once),
             color,
+            particle_entities: Vec::new(), // Will be populated after spawn
+            show_gizmos: false,            // Particles by default
+            enable_flicker: false,         // No flicker by default
         }
     }
 }
@@ -287,33 +302,35 @@ impl Plugin for ProceduralLightningPlugin {
 /// Update procedural lightning animations and rendering
 #[allow(clippy::needless_pass_by_value)]
 fn update_procedural_lightning(
-    mut commands: Commands,
-    mut query: Query<(Entity, &mut ProceduralLightning, &Transform)>,
+    mut query: Query<(&mut ProceduralLightning, &Transform)>,
     time: Res<Time>,
     mut gizmos: Gizmos,
 ) {
-    for (entity, mut lightning, transform) in &mut query {
+    for (mut lightning, transform) in &mut query {
         lightning.animation_timer.tick(time.delta());
         lightning.lifetime.tick(time.delta());
 
-        // Draw lightning tree as gizmos for visualization
-        // In production, you'd render with custom shader or Hanabi particles
-        if lightning.animation_timer.just_finished() {
-            // Flicker effect - only draw every N frames
+        // Draw lightning using gizmos
+        // With flicker: alternates on/off based on timer progress
+        // Without flicker: draw every frame
+        let should_draw = if lightning.enable_flicker {
+            // Flicker on/off - visible for first half of timer cycle
+            lightning.animation_timer.elapsed_secs() / lightning.animation_timer.duration().as_secs_f32() < 0.5
+        } else {
+            true
+        };
+        
+        if should_draw {
             for (start_idx, end_idx) in &lightning.tree.segments {
                 let start = transform.transform_point(lightning.tree.nodes[*start_idx].position);
                 let end = transform.transform_point(lightning.tree.nodes[*end_idx].position);
                 let energy = lightning.tree.nodes[*start_idx].energy;
 
                 // Vary color intensity by energy
-                let color = lightning.color.with_alpha(energy * 0.9);
+                let alpha = if lightning.show_gizmos { 0.9 } else { 0.7 };
+                let color = lightning.color.with_alpha(energy * alpha);
                 gizmos.line(start, end, color);
             }
-        }
-
-        // Despawn when lifetime expires
-        if lightning.lifetime.just_finished() {
-            commands.entity(entity).despawn();
         }
     }
 }
@@ -323,99 +340,135 @@ fn update_procedural_lightning(
 fn cleanup_expired_lightning(mut commands: Commands, query: Query<(Entity, &ProceduralLightning)>) {
     for (entity, lightning) in &query {
         if lightning.lifetime.is_finished() {
+            // Despawn all particle entities first
+            for &particle_entity in &lightning.particle_entities {
+                if let Ok(mut entity_commands) = commands.get_entity(particle_entity) {
+                    entity_commands.despawn();
+                }
+            }
+            // Then despawn the main lightning entity
             commands.entity(entity).despawn();
         }
     }
 }
 
-/// Helper function to spawn a procedural lightning effect
+/// Helper function to spawn a procedural lightning effect with particles
 pub fn spawn_procedural_lightning(
     commands: &mut Commands,
+    effects: &mut ResMut<Assets<EffectAsset>>,
     start: Vec3,
     end: Vec3,
     config: &LightningConfig,
     lifetime_secs: f32,
     color: Color,
+    show_gizmos: bool,
+    show_particles: bool,
 ) -> Entity {
-    let lightning = ProceduralLightning::new(start, end, config, lifetime_secs, color);
+    let mut lightning = ProceduralLightning::new(start, end, config, lifetime_secs, color);
+    lightning.show_gizmos = show_gizmos;
+
+    // Create multi-layered particle effects if enabled
+    let particle_entities = if show_particles {
+        create_procedural_lightning_particle_effects(commands, effects, &lightning.tree, color)
+    } else {
+        Vec::new()
+    };
+    lightning.particle_entities = particle_entities;
 
     commands.spawn((lightning, Transform::default())).id()
 }
 
-/// Create a Hanabi particle effect that follows procedural lightning path
-#[allow(clippy::too_many_lines)] // Complex particle setup
-pub fn create_procedural_lightning_particle_effect(
-    effects: &mut Assets<EffectAsset>,
+/// Create traveling ionized particle effect for procedural lightning
+///
+/// Returns vector of entity IDs for particle effects
+///
+/// Creates particles that travel from spawn point to target with random scatter
+fn create_procedural_lightning_particle_effects(
+    commands: &mut Commands,
+    effects: &mut ResMut<Assets<EffectAsset>>,
     tree: &LightningTree,
-    base_color: Vec4,
-) -> Handle<EffectAsset> {
+    color: Color,
+) -> Vec<Entity> {
+    let mut particle_entities = Vec::new();
+
+    // Extract color components
+    let [r, g, b, _] = color.to_srgba().to_f32_array();
+    let base_color = Vec4::new(r, g, b, 1.0);
+
+    let start_pos = tree.nodes[0].position;
+    let end_pos = tree.nodes.last().map(|n| n.position).unwrap_or(start_pos);
+    
+    // Calculate direction and distance for traveling particles
+    let direction = (end_pos - start_pos).normalize_or_zero();
+    let distance = start_pos.distance(end_pos);
+    
+    // Calculate appropriate lifetime based on distance (particles should reach target)
+    let base_speed = 20.0; // units per second
+    let particle_lifetime = (distance / base_speed).max(0.3);
+
+    // ==== Traveling Ionized Particles ====
+    // Creates particles that travel from spawn to target with random scatter
     let writer = ExprWriter::new();
+    
+    let intensity = 12.0;
+    let lifetime = writer.lit(particle_lifetime * 0.8).uniform(writer.lit(particle_lifetime * 1.2)).expr();
+    let age = writer.lit(0.0).expr();
+    
+    // Spawn at center with small radius for scatter
+    let spawn_center = writer.lit(Vec3::ZERO).expr();
+    let spawn_radius = writer.lit(0.5).expr();
+    
+    // Velocity pointing from start to end with random variance
+    let base_velocity = direction * base_speed;
+    let velocity_vec = writer.lit(base_velocity * 0.8).uniform(writer.lit(base_velocity * 1.2)).expr();
+    
+    let drag = writer.lit(1.5).expr();
 
-    // Very short lifetime for electric snap
-    let lifetime = writer.lit(0.03).uniform(writer.lit(0.12)).expr();
-    let init_lifetime = SetAttributeModifier::new(Attribute::LIFETIME, lifetime);
-    let init_age = SetAttributeModifier::new(Attribute::AGE, writer.lit(0.0).expr());
-
-    // Sample particle positions along lightning path
-    let particle_positions = tree.sample_particle_positions(64);
-    let particle_count = particle_positions.len().min(128) as f32;
-
-    // Spawn particles in a tight volume along the lightning path
-    let init_pos = SetPositionSphereModifier {
-        center: writer.lit(Vec3::ZERO).expr(),
-        radius: writer.lit(2.0).expr(),
+    let traveling_effect = EffectAsset::new(
+        512, 
+        SpawnerSettings::rate(200.0.into()), 
+        writer.finish()
+    )
+    .with_name("ionized_particles")
+    .init(SetAttributeModifier::new(Attribute::LIFETIME, lifetime))
+    .init(SetAttributeModifier::new(Attribute::AGE, age))
+    .init(SetPositionSphereModifier {
+        center: spawn_center,
+        radius: spawn_radius,
         dimension: ShapeDimension::Volume,
-    };
+    })
+    .init(SetAttributeModifier::new(Attribute::VELOCITY, velocity_vec))
+    .update(LinearDragModifier::new(drag))
+    .render(ColorOverLifetimeModifier::new({
+        let mut gradient = bevy_hanabi::Gradient::new();
+        gradient.add_key(0.0, base_color * intensity);
+        gradient.add_key(0.4, base_color * intensity * 0.8);
+        gradient.add_key(0.8, base_color * intensity * 0.3);
+        gradient.add_key(1.0, Vec4::ZERO);
+        gradient
+    }))
+    .render(SizeOverLifetimeModifier {
+        gradient: {
+            let mut gradient = bevy_hanabi::Gradient::new();
+            gradient.add_key(0.0, Vec3::splat(0.4));
+            gradient.add_key(0.2, Vec3::splat(0.6));
+            gradient.add_key(0.7, Vec3::splat(0.3));
+            gradient.add_key(1.0, Vec3::splat(0.1));
+            gradient
+        },
+        screen_space_size: false,
+    });
 
-    // Minimal movement - lightning is instantaneous
-    let init_vel = SetVelocitySphereModifier {
-        center: writer.lit(Vec3::ZERO).expr(),
-        speed: writer.lit(5.0).uniform(writer.lit(15.0)).expr(),
-    };
+    let traveling_handle = effects.add(traveling_effect);
+    let traveling_entity = commands
+        .spawn((
+            ParticleEffect::new(traveling_handle),
+            Transform::from_translation(start_pos),
+        ))
+        .id();
+    particle_entities.push(traveling_entity);
 
-    // Random jitter for crackling effect
-    let jitter = AccelModifier::new(
-        writer
-            .lit(Vec3::new(-100.0, -100.0, -100.0))
-            .uniform(writer.lit(Vec3::new(100.0, 100.0, 100.0)))
-            .expr(),
-    );
-
-    // High drag - particles stop quickly
-    let drag = LinearDragModifier::new(writer.lit(25.0).expr());
-
-    // Electric HDR color gradient
-    let mut color_gradient = bevy_hanabi::Gradient::<Vec4>::new();
-    color_gradient.add_key(0.0, base_color * 6.0); // Bright HDR flash
-    color_gradient.add_key(0.2, base_color * 4.0); // Intense glow
-    color_gradient.add_key(0.5, base_color * 2.0); // Medium
-    color_gradient.add_key(0.8, base_color * 0.5); // Fading
-    color_gradient.add_key(1.0, Vec4::ZERO); // Fade out
-
-    // Small, sharp particles
-    let mut size_gradient = bevy_hanabi::Gradient::<Vec3>::new();
-    size_gradient.add_key(0.0, Vec3::splat(8.0));
-    size_gradient.add_key(0.3, Vec3::splat(6.0));
-    size_gradient.add_key(1.0, Vec3::splat(2.0));
-
-    // Burst spawner - all particles at once
-    let spawner = SpawnerSettings::burst(particle_count.into(), 0.01.into());
-
-    let effect = EffectAsset::new(128, spawner, writer.finish())
-        .with_name("procedural_lightning")
-        .init(init_lifetime)
-        .init(init_age)
-        .init(init_pos)
-        .init(init_vel)
-        .update(jitter)
-        .update(drag)
-        .render(ColorOverLifetimeModifier::new(color_gradient))
-        .render(SizeOverLifetimeModifier {
-            gradient: size_gradient,
-            screen_space_size: false,
-        });
-
-    effects.add(effect)
+    particle_entities
 }
 
 #[cfg(test)]

@@ -6,8 +6,8 @@
 #![allow(clippy::multiple_crate_versions)]
 
 use procedural_lightning::{
-    spawn_procedural_lightning, LightningConfig, LightningTree, ProceduralLightning,
-    ProceduralLightningPlugin,
+    spawn_procedural_lightning, LightningConfig, LightningTree,
+    ProceduralLightning, ProceduralLightningPlugin,
 };
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
@@ -34,9 +34,9 @@ fn main() {
             (
                 move_target,
                 spawn_lightning_on_click,
+                apply_flicker_setting,
                 update_config_preview,
                 cleanup_old_lightning,
-                render_lightning_gizmos,
             ),
         )
         .run();
@@ -56,6 +56,12 @@ struct DemoState {
     lifetime: f32,
     auto_spawn: bool,
     spawn_timer: Timer,
+    
+    // Rendering options
+    show_gizmos: bool,
+    enable_flicker: bool,
+    flicker_speed: f32, // seconds per flicker cycle
+    show_particles: bool,
 
     // Presets
     selected_preset: LightningPreset,
@@ -97,9 +103,13 @@ impl Default for DemoState {
             max_depth: 8,
             max_branch_depth: 3,
             color: [0.3, 0.7, 1.0], // Electric blue
-            lifetime: 0.3,
+            lifetime: 0.5,
             auto_spawn: false,
             spawn_timer: Timer::from_seconds(1.0, TimerMode::Repeating),
+            show_gizmos: true, // Show gizmos enhanced with particles
+            enable_flicker: false,
+            flicker_speed: 0.05,
+            show_particles: true,
             selected_preset: LightningPreset::Classic,
             preview_tree: None,
             preview_stats: TreeStats::default(),
@@ -290,6 +300,22 @@ fn demo_ui(mut contexts: EguiContexts, mut demo_state: ResMut<DemoState>) {
 
             ui.separator();
 
+            // Rendering options
+            ui.heading("🎨 Rendering");
+            ui.checkbox(&mut demo_state.show_gizmos, "Show Debug Gizmos");
+            ui.label("Toggle debug line visualization");
+            
+            ui.checkbox(&mut demo_state.enable_flicker, "Enable Flicker Effect");
+            if demo_state.enable_flicker {
+                ui.label("Flicker Speed:");
+                ui.add(egui::Slider::new(&mut demo_state.flicker_speed, 0.02..=0.2).suffix(" sec"));
+            }
+            
+            ui.checkbox(&mut demo_state.show_particles, "Show Particle Effects");
+            ui.label("Ionized particle trails");
+
+            ui.separator();
+
             // Spawn controls
             ui.heading("⚡ Spawn Controls");
             if ui.button("🎯 Spawn Lightning to Target").clicked() {
@@ -390,6 +416,7 @@ fn spawn_lightning_on_click(
     target_query: Query<&Transform, With<LightningTarget>>,
     time: Res<Time>,
     mut spawn_timer: Local<Option<Timer>>,
+    mut effects: ResMut<Assets<EffectAsset>>,
 ) {
     if spawn_timer.is_none() {
         *spawn_timer = Some(demo_state.spawn_timer.clone());
@@ -436,18 +463,32 @@ fn spawn_lightning_on_click(
     let start = target_pos + Vec3::new(0.0, 250.0, 0.0);
     let end = target_pos;
 
-    spawn_procedural_lightning(
+    let lightning_entity = spawn_procedural_lightning(
         &mut commands,
+        &mut effects,
         start,
         end,
         &config,
         demo_state.lifetime,
         color,
+        demo_state.show_gizmos,
+        demo_state.show_particles,
     );
 
-    commands.spawn(DemoLightning {
+    commands.entity(lightning_entity).insert(DemoLightning {
         spawn_time: time.elapsed_secs(),
     });
+}
+
+// System to apply flicker setting to newly spawned lightning
+fn apply_flicker_setting(
+    demo_state: Res<DemoState>,
+    mut query: Query<&mut ProceduralLightning, Added<ProceduralLightning>>,
+) {
+    for mut lightning in &mut query {
+        lightning.enable_flicker = demo_state.enable_flicker;
+        lightning.animation_timer.set_duration(std::time::Duration::from_secs_f32(demo_state.flicker_speed));
+    }
 }
 
 fn cleanup_old_lightning(
@@ -460,19 +501,6 @@ fn cleanup_old_lightning(
     for (entity, demo_lightning) in &query {
         if current_time - demo_lightning.spawn_time > 2.0 {
             commands.entity(entity).despawn();
-        }
-    }
-}
-
-fn render_lightning_gizmos(query: Query<(&ProceduralLightning, &Transform)>, mut gizmos: Gizmos) {
-    for (lightning, transform) in &query {
-        for (start_idx, end_idx) in &lightning.tree.segments {
-            let start: Vec3 = transform.transform_point(lightning.tree.nodes[*start_idx].position);
-            let end: Vec3 = transform.transform_point(lightning.tree.nodes[*end_idx].position);
-            let energy = lightning.tree.nodes[*start_idx].energy;
-
-            let color = lightning.color.with_alpha(energy);
-            gizmos.line(start, end, color);
         }
     }
 }
