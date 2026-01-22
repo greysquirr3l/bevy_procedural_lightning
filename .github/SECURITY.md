@@ -34,6 +34,7 @@ This repository follows OSSF (Open Source Security Foundation) best practices:
 ## Dependencies
 
 We regularly update dependencies to patch security vulnerabilities. Dependencies are managed via:
+
 - Cargo.toml for Rust dependencies
 - Automated security alerts via GitHub Dependabot
 

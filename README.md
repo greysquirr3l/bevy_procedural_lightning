@@ -1,5 +1,7 @@
 # Procedural Lightning VFX
 
+![Screenshot](screenshot.png)
+
 A procedural lightning generation system for Bevy game engine, inspired by the [LightningGen](https://github.com/CXUtk/LightningGen) algorithm.
 
 [![Bevy 0.17](https://img.shields.io/badge/Bevy-0.17-blue)](https://bevyengine.org/)
