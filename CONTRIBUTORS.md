@@ -25,6 +25,7 @@ Thank you to all the people who have contributed code to this project!
 ### Other Contributions
 
 Contributions come in many forms! Thank you to those who have:
+
 - 📖 Improved documentation
 - 🐛 Reported bugs
 - 💡 Suggested features

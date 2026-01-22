@@ -46,6 +46,7 @@ We love pull requests! Here's the process:
 ### Branch Protection
 
 The `main` branch is protected and requires:
+
 - At least 1 approving review
 - All conversations resolved
 - Up-to-date with base branch
@@ -90,7 +91,7 @@ This project follows standard Rust conventions:
 
 We use conventional commit messages:
 
-```
+```text
 type(scope): brief description
 
 Longer description if needed
@@ -102,7 +103,8 @@ Longer description if needed
 Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
 
 Examples:
-```
+
+```text
 feat(particles): add corona discharge effect
 fix(generation): prevent backward branching
 docs(readme): update installation instructions
@@ -110,7 +112,7 @@ docs(readme): update installation instructions
 
 ## Project Structure
 
-```
+```text
 bevy_procedural_lightning/
 ├── src/
 │   └── lib.rs          # Core library code
@@ -160,6 +162,7 @@ We are committed to providing a welcoming and inclusive environment for everyone
 ### Enforcement
 
 Violations may result in:
+
 1. Warning
 2. Temporary ban from participation
 3. Permanent ban from the project
